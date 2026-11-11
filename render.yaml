@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: hollywood-empire-online
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    disk:
+      name: hollywood-room-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: HE_DATA_DIR
+        value: /data
