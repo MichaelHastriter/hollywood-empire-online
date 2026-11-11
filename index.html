@@ -581,9 +581,10 @@ const money=(v)=>{let n=num(v);const sign=n<0?'−':'';n=Math.abs(n);return sign
 const pillTag={"best-picture":'🏆 Best Picture',"worst-picture":'🍅 Razzie winner',"animation":'✧ Animation',"cult":'✦ Cult classic',"hit":'◆ Blockbuster',"expensive":'♜ Big budget',"tv":'▣ TV spin-off',"horror":'☾ Horror',"pioneer":'✷ Pioneer'};
 let settlementYearFilter='all',settlementStudioFilter='all';
 let S=null,view='market',filterText='',filterTag='all',sortBy='name',viewPlayer=0,lastReport=[],historyPlayer=0,historyFilter='all',historyEra='latest',showRivals=false,historyLimit=100,showAllGenreStrengths=false;
-function save(){try{localStorage.setItem(STORE,JSON.stringify(S))}catch(e){}}
+function save(){if(window.__heOnlineActive)return;try{localStorage.setItem(STORE,JSON.stringify(S))}catch(e){}}
 function readCurrentSave(){if(S)return S;try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch(e){return null}}
 function hasLocalCampaign(){
+ if(window.__heOnlineActive)return Boolean(S);
  if(S)return true;
  try{return localStorage.getItem(STORE)!==null}catch(e){return false}
 }
@@ -1804,7 +1805,8 @@ window.HollywoodOnlineBridge={
   closeModal();openApp();return true;
  },
  init:(config)=>{
-  if(S)throw Error('Room already started');
+  if(S&&!window.__heOnlineActive)throw Error('Room already started');
+  if(window.__heOnlineActive)S=null;
   $('campaignStart').value=String(config.startTurn);
   $('campaignEnd').value=String(config.endTurn);
   $('humans').value=String(config.humans);
@@ -1835,4 +1837,4 @@ initialize();
 
 </script><!-- Hollywood Empire 4.2: original commissioned-for-this-game-style synthesized instrumentals, one per 48 eras. 3.8 fixes preserved. -->
 <!-- Hollywood Empire 3.8: 29 targeted film metadata updates, franchise gating and financing catch-up, ten sort choices. Real-world gross != game studio receipts. */ -->
-<!-- v4.3 film finance: 504 historical title/year matches. Original source is The Numbers data captured 2019-12-05; no future results shown before premiere. --><script src="/online.js" defer></script></body></html>
+<!-- v4.3 film finance: 504 historical title/year matches. Original source is The Numbers data captured 2019-12-05; no future results shown before premiere. --><script src="./online.js" defer></script></body></html>
