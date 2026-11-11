@@ -1,129 +1,103 @@
-/* Hollywood Empire online: server-driven room state; offline mode is unchanged. */
-(() => {
-  'use strict';
-  const bridge = window.HollywoodOnlineBridge;
-  if (!bridge) return;
-  const css = document.createElement('style');
-  css.textContent = `
-    #heOnlineOpen {position:fixed;top:10px;right:10px;z-index:9998;background:#dfb66e;color:#152037;border:2px solid #152037;border-radius:12px;padding:9px 13px;font-weight:bold;box-shadow:0 4px 22px #0007;font-size:14px}
-    #heOnlinePanel {position:fixed;inset:0;background:#050b16e9;z-index:9999;display:none;overflow:auto;padding:30px 12px}
-    #heOnlinePanel.visible {display:block}
-    #heOnlineBox {max-width:500px;margin:auto;background:#152034;border:1px solid #a98c55;border-radius:18px;padding:22px;color:#ecf1ff;font:16px system-ui,sans-serif}
-    #heOnlineBox input,#heOnlineBox select {background:#0b1323;color:#fff;padding:10px;border:1px solid #60728f;border-radius:7px;max-width:100%;width:100%;margin:5px 0 12px}
-    #heOnlineBox button {padding:10px 13px;border-radius:8px;margin:4px;background:#d5ae69;color:#162137;font-weight:bold;border:0}
-    #heOnlineBox button.subtle {background:#293a50;color:#f6f8ff}
-    #heOnlineBox label {display:block;font-size:13px;margin-top:8px}
-    #heOnlineStatus {position:fixed;bottom:12px;left:12px;z-index:9998;background:#172437ed;border:1px solid #8c7549;color:#fff;border-radius:10px;padding:10px;font:13px system-ui;max-width:300px;display:none}
-    #heOnlineBox .error {color:#ffb9a9;min-height:22px}
-  `;
-  document.head.append(css);
-  const btn = document.createElement('button'); btn.id='heOnlineOpen'; btn.textContent='🌐 Online multiplayer';
-  const panel = document.createElement('div');panel.id='heOnlinePanel';
-  panel.innerHTML=`<section id="heOnlineBox">
-  <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">🌐 Online multiplayer</h2><button type="button" class="subtle" id="heOnlineClose">Close</button></div>
-  <p>One shared game across phones. Every player gets a studio seat and a private reconnect key.</p>
-  <label>Your studio name</label><input id="heName" value="Silverlight Pictures" maxlength="32">
-  <button id="heCreate">Create room</button>
-  <label>Join existing room (6-character code)</label><input id="heCode" maxlength="6" placeholder="ABC234" autocomplete="off">
-  <button id="heJoin">Join room</button><button id="heReconnect" class="subtle">Reconnect saved room</button>
-  <div id="heRoomDetails" style="display:none;margin-top:15px;border-top:1px solid #586275;padding-top:12px">
-    <h3 id="heRoomCode"></h3><p id="heMembers"></p><p id="heTurn"></p>
-    <div id="heHostStart"><p>Host: choose the campaign range and number of AI studios. Other humans must join before starting.</p>
-      <label>Start era</label><select id="heStartEra"></select><label>End era</label><select id="heEndEra"></select>
-      <label>AI opponents (total studios maximum 4)</label><select id="heBots"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
-      <button id="heStart">Start shared game</button>
-    </div>
-    <p style="font-size:12px;color:#b8c5d9">Game data is stored on the online server. Keep your reconnect key in this browser. The first player is the host and advances completed eras.</p>
-  </div><p class="error" id="heError"></p>
-  <button id="heOffline" class="subtle">Use offline game instead</button>
-  </section>`;
-  const status=document.createElement('div'); status.id='heOnlineStatus';
-  document.body.append(btn,panel,status);
-  const el=id=>document.getElementById(id);
-  const safe=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const series=window.HollywoodGenreTest?.eras||[];
-  series.forEach((e,i)=>{const txt=e.from===e.to?String(e.from):`${e.from}–${e.to}`;for(const id of ['heStartEra','heEndEra']){const x=document.createElement('option');x.value=i;x.textContent=txt;el(id).append(x)}});
-  el('heStartEra').value='0';el('heEndEra').value=String(Math.max(0,series.length-1));
-  let ws=null,online=false,seat=null,code=null,version=0,latest=null,started=false;
-  const roomKey='hollywood-empire-online-room';
-  function error(message){el('heError').textContent=String(message||'');}
-  function show(){panel.classList.add('visible')}
-  function hide(){panel.classList.remove('visible')}
-  btn.onclick=show;el('heOnlineClose').onclick=hide;
-  el('heOffline').onclick=()=>{if(online){if(!confirm('Disconnect from online room and use local offline play?'))return;online=false;ws?.close()}status.style.display='none';btn.textContent='🌐 Online multiplayer';hide()};
-  function connect(payload){
-    if(ws && ws.readyState<2)ws.close();
-    error('Connecting…');
-    const scheme=location.protocol==='https:'?'wss:':'ws:';
-    ws=new WebSocket(`${scheme}//${location.host}/ws`);
-    ws.onopen=()=>ws.send(JSON.stringify(payload));
-    ws.onclose=()=>{if(online){error('Connection lost. Use Reconnect saved room.');status.textContent='⚠ Offline: reconnect to continue';status.style.display='block'}};
-    ws.onerror=()=>error('Network unavailable. Confirm the server is deployed and reachable.');
-    ws.onmessage=e=>{
-      let m;try{m=JSON.parse(e.data)}catch{return}
-      if(m.type==='error'){error(m.message);return}
-      if(m.type==='welcome'){
-        online=true;seat=m.seat;code=m.code;
-        localStorage.setItem(roomKey,JSON.stringify({code:m.code,token:m.token}));
-        btn.textContent=`🌐 Room ${code}`;
-        error('');
-      }
-      if(m.type==='state'){
-        latest=m.state;version=m.version;started=m.started;
-        el('heRoomDetails').style.display='block';
-        el('heRoomCode').textContent=`Room ${safe(m.code)} · You are studio #${seat+1}`;
-        el('heMembers').innerHTML=`<strong>Joined:</strong> ${m.members.map(x=>`#${x.seat+1} ${safe(x.name)}`).join(' · ')}`;
-        el('heHostStart').style.display=(!started&&seat===0)?'block':'none';
-        if(m.state){
-          bridge.setSnapshot(m.state);
-          const turn=(m.state.queue||[])[0];
-          el('heTurn').textContent=m.state.complete?'Campaign complete':turn==null?'All picks complete: host may advance':`Now drafting: ${m.state.players[turn]?.name} (#${turn+1})`;
-          status.textContent=`🌐 ${code} · Your studio #${seat+1} · ${el('heTurn').textContent}`;
-          status.style.display='block';
-          hide();
-        }else{
-          el('heTurn').textContent='Waiting for the host to start the shared game.';
-          status.textContent=`🌐 Room ${code} · waiting to start`;
-          status.style.display='block';
-        }
-      }
-    };
+/* Hollywood Empire V4.84: Github Pages / Supabase host-coordinated online beta.
+   Server authenticates room seats and turns. Host browser executes the existing game engine.
+   Not suitable for adversarial or prize-money competitive play. */
+(()=>{'use strict';
+ const bridge=window.HollywoodOnlineBridge;if(!bridge)return;
+ const API='https://umrzadpfoylkgdcaauiu.supabase.co/functions/v1/he-room';
+ const eras=window.HollywoodGenreTest?.eras||[];
+ const KEY='he-supabase-room-v1';
+ let session=null,version=-1,snapshot=null,started=false,pendingId='',working=false,requesting=false,stopped=false;
+ let seenError=null;
+ const style=document.createElement('style');style.textContent=`
+ #heOnlineOpen{position:fixed;top:9px;right:9px;z-index:9997;background:#e2b96f;color:#152037;border:2px solid #18243a;border-radius:12px;padding:9px;font:700 13px system-ui;box-shadow:0 4px 15px #0008}
+ #heOnlinePanel{position:fixed;inset:0;background:#07101ced;z-index:9999;display:none;overflow-y:auto;padding:18px 10px}
+ #heOnlinePanel.active{display:block}
+ #heOnlineInner{max-width:510px;margin:auto;background:#15223a;border:1px solid #b18f59;border-radius:15px;color:#fff;padding:18px;font:15px system-ui}
+ #heOnlineInner input,#heOnlineInner select{box-sizing:border-box;width:100%;padding:11px;margin:6px 0 12px;background:#0c1528;color:#fff;border:1px solid #71819b;border-radius:8px}
+ #heOnlineInner button{background:#e3b86b;color:#172335;border:0;border-radius:8px;padding:10px 14px;font-weight:700;margin:4px}
+ #heOnlineInner button.subtle{background:#314058;color:white}
+ #heOnlineInner label{display:block;margin-top:6px;font-size:13px;color:#ccd5e9}
+ #heOnlineErr{min-height:24px;color:#ffb8ad;white-space:pre-wrap}
+ #heOnlineStatus{position:fixed;bottom:12px;left:12px;max-width:82vw;z-index:9996;background:#142238f5;border:1px solid #b18f59;border-radius:10px;color:white;padding:8px;font:13px system-ui;display:none}
+ `;document.head.append(style);
+ const open=document.createElement('button');open.id='heOnlineOpen';open.textContent='🌐 Online game';
+ const panel=document.createElement('div');panel.id='heOnlinePanel';panel.innerHTML=`<section id="heOnlineInner">
+ <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">🌐 Hollywood Empire Online</h2><button id="heOnlineClose" class="subtle">Close</button></div>
+ <p>Create a room, join from another phone, and keep your reconnect key in this browser. The host's browser processes game turns.</p>
+ <label>Studio name</label><input id="heName" maxlength="32" value="Silverlight Pictures" />
+ <button id="heCreate">Create room</button>
+ <label>Join room code</label><input id="heCode" maxlength="6" placeholder="ABC234" autocapitalize="characters" />
+ <button id="heJoin">Join room</button><button id="heReconnect" class="subtle">Reconnect</button>
+ <div id="heRoom" style="display:none;border-top:1px solid #5b6a7f;margin-top:15px;padding-top:12px">
+ <h3 id="heRoomTitle"></h3><p id="heRoomMembers"></p><p id="heTurn"></p>
+ <div id="heHostSetup"><label>Starting era</label><select id="heStartEra"></select><label>Ending era</label><select id="heEndEra"></select><label>AI studios</label><select id="heBots"><option>0</option><option>1</option><option>2</option><option>3</option></select><button id="heStart">Start game</button></div>
+ </div><p id="heOnlineErr"></p>
+ <p style="font-size:12px;color:#c7d1e1">Beta: The host must keep the game open to process moves. Server checks room and turn ownership, but game calculations run in the host browser. Offline saves are kept separately.</p>
+ <button id="heStop" class="subtle">Disconnect (reload for offline save)</button></section>`;
+ const status=document.createElement('div');status.id='heOnlineStatus';document.body.append(open,panel,status);
+ const $=id=>document.getElementById(id),safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ for(let i=0;i<eras.length;i++){const label=eras[i].from===eras[i].to?''+eras[i].from:`${eras[i].from}–${eras[i].to}`;for(const id of ['heStartEra','heEndEra']){const el=document.createElement('option');el.value=String(i);el.textContent=label;$(id).append(el)}}$('heEndEra').value=String(eras.length-1);
+ function error(s){$('heOnlineErr').textContent=String(s||'')}
+ function show(){panel.classList.add('active')}function hide(){panel.classList.remove('active')}
+ open.onclick=show;$('heOnlineClose').onclick=hide;
+ async function api(data){const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});let result;try{result=await response.json()}catch{throw Error('Supabase did not return JSON')}if(!response.ok||result.error)throw Error(result.error||'HTTP '+response.status);return result}
+ async function send(op,extra={}){if(!session)throw Error('Not connected');return api({op,code:session.code,token:session.token,...extra})}
+ function joinSession(data){session={code:data.code,token:data.token,seat:data.seat};localStorage.setItem(KEY,JSON.stringify(session));version=-1;seenError=null;started=false;window.__heOnlineActive=true;open.textContent='🌐 '+session.code;$('heRoom').style.display='block';error('');show();}
+ async function createOrJoin(kind){try{error('Connecting…');const data=await api({op:kind,name:$('heName').value,code:$('heCode').value.trim().toUpperCase()});joinSession(data);await poll()}catch(e){error(e.message)}}
+ $('heCreate').onclick=()=>createOrJoin('create');$('heJoin').onclick=()=>createOrJoin('join');
+ $('heReconnect').onclick=async()=>{try{const saved=JSON.parse(localStorage.getItem(KEY)||'null');if(!saved)throw Error('No reconnect key saved in this browser.');joinSession(saved);await poll()}catch(e){error(e.message)}};
+ $('heStop').onclick=()=>{if(!confirm('Disconnect from the shared game? Reload to resume your separate offline save.'))return;session=null;window.__heOnlineActive=false;stopped=true;location.reload()};
+ async function start(){if(!session||session.seat!==0)return;try{
+  const bots=Number($('heBots').value),startTurn=Number($('heStartEra').value),endTurn=Number($('heEndEra').value);
+  if(startTurn>endTurn)throw Error('End era must be after start era');
+  const room=await send('poll');const names=room.members.map(x=>x.name);
+  if(names.length+bots>4)throw Error('Maximum four studios, including AI');
+  if(!confirm('Start online campaign? Any existing OFFLINE save remains untouched; online progress is stored in Supabase.'))return;
+  // Only online UI has the right to initialize this game engine.
+  window.__heOnlineActive=true;
+  bridge.init({startTurn,endTurn,humans:names.length,bots,names});
+  const state=bridge.getSnapshot();await send('start',{state,bots});await poll();hide();
+ }catch(e){error(e.message);show()}}
+ $('heStart').onclick=start;
+ async function hostAction(p){if(!session||session.seat!==0||working)return;working=true;try{
+  if(p.type==='buy')bridge.action('buy',{filmId:p.filmId});
+  else if(p.type==='pass')bridge.action('pass');
+  else if(p.type==='advance')bridge.action('advance');
+  else if(p.type==='tv')bridge.action('tv',{filmId:p.filmId,playerIndex:p.playerIndex,enabled:p.enabled});
+  else throw Error('Unsupported action');
+  await send('commit',{actionId:p.id,version,state:bridge.getSnapshot()});pendingId=p.id;await poll();
+ }catch(e){try{await send('abort',{actionId:p.id,message:e.message})}catch{}error('Turn processing failed: '+e.message);show();await poll().catch(()=>{})}finally{working=false}}
+ async function poll(){if(!session||requesting||stopped)return;requesting=true;try{
+  const m=await send('poll',{since:version});
+  started=m.started;$('heRoom').style.display='block';$('heRoomTitle').textContent=`Room ${m.code} · Your seat #${session.seat+1}`;
+  $('heRoomMembers').innerHTML='<b>Studios:</b> '+m.members.map(x=>`#${x.seat+1} ${safe(x.name)}`).join(' · ');
+  $('heHostSetup').style.display=(!started&&session.seat===0)?'block':'none';
+  if(m.state){snapshot=m.state;version=m.version;window.__heOnlineActive=true;bridge.setSnapshot(snapshot)}
+  else if(version<0){version=m.version}
+  const who=snapshot?.queue?.[0];const turn=!started?'Waiting for host to start':snapshot?.complete?'Campaign finished':who==null?'All drafting done; host can advance':`On the clock: ${snapshot?.players?.[who]?.name||'Studio '+(who+1)}`;
+  $('heTurn').textContent=turn;status.textContent=`🌐 ${m.code} · Seat #${session.seat+1} · ${turn}`;status.style.display='block';
+  if(m.lastError && m.lastError!==seenError){seenError=m.lastError;error(m.lastError);show()}
+  if(m.pending && session.seat===0 && m.pending.id!==pendingId && !working){
+   const task=m.pending;requesting=false;await hostAction(task);return;
   }
-  el('heCreate').onclick=()=>connect({type:'create',name:el('heName').value});
-  el('heJoin').onclick=()=>connect({type:'join',code:el('heCode').value.toUpperCase(),name:el('heName').value});
-  el('heReconnect').onclick=()=>{
-    let saved;try{saved=JSON.parse(localStorage.getItem(roomKey)||'null')}catch{}
-    if(!saved){error('No saved room for this browser. Use the six-character code to join before the game starts.');return}
-    connect({type:'resume',...saved});
-  };
-  el('heStart').onclick=()=>send({type:'start',startTurn:+el('heStartEra').value,endTurn:+el('heEndEra').value,bots:+el('heBots').value});
-  function send(payload){if(!ws||ws.readyState!==WebSocket.OPEN){error('Not connected');show();return}ws.send(JSON.stringify({...payload,version}));}
-  /* Capture state-changing UI actions before the original local game handlers run.
-     Server runs the canonical game; no local purchase, finance or contract write is trusted. */
-  document.addEventListener('click',e=>{
-    if(!online)return;
-    const buy=e.target.closest('[data-buy]'),pass=e.target.closest('#passBtn'),advance=e.target.closest('#advanceBtn');
-    const forbidden=e.target.closest('#newBtn,#returnSetupBtn,#deleteCurrentBtn,#deleteSavedBtn,#startBtn,#resumeBtn,[data-import-save]');
-    if(!buy&&!pass&&!advance&&!forbidden)return;
-    e.stopImmediatePropagation();e.preventDefault();
-    if(forbidden){error('Shared rooms use the online lobby. Offline save controls cannot change a shared game.');show();return}
-    if(!started){error('The host must start the room before anyone can draft.');show();return}
-    if(buy||pass){
-      if(latest?.queue?.[0]!==seat){error('It is not your studio’s turn.');show();return}
-      send(buy?{type:'buy',filmId:buy.dataset.buy}:{type:'pass'});
-    }else if(advance){
-      if(seat!==0){error('Only the room host can advance a completed era.');show();return}
-      send({type:'advance'});
-    }
-  },true);
-  document.addEventListener('change',e=>{
-    if(!online||!started||!e.target.dataset.tv)return;
-    e.stopImmediatePropagation();e.preventDefault();
-    const pi=Number(e.target.dataset.player),filmId=e.target.dataset.tv,enabled=e.target.checked;
-    e.target.checked=!enabled;
-    if(pi!==seat){error('Only the owner can change this contract.');show();return}
-    if(!enabled && !confirm('Turning off a previously earning TV deal may permanently cancel a paying season. Continue?'))return;
-    send({type:'tv',playerIndex:pi,filmId,enabled});
-  },true);
-  if(localStorage.getItem(roomKey))btn.textContent='🌐 Reconnect online game';
+ }catch(e){error('Connection: '+e.message);status.textContent='⚠ Multiplayer connection issue';status.style.display='block'}finally{requesting=false}}
+ setInterval(()=>{if(session&&!stopped)poll()},1700);
+ async function submit(action){try{if(!session||!started)throw Error('The game has not started');const data=await send('submit',{version,action});if(!data.ok)throw Error('Action rejected');await poll()}catch(e){error(e.message);show()}}
+ document.addEventListener('click',e=>{
+  if(!session||!started)return;
+  const buy=e.target.closest('[data-buy]'),pass=e.target.closest('#passBtn'),advance=e.target.closest('#advanceBtn');
+  const forbidden=e.target.closest('#newBtn,#returnSetupBtn,#deleteCurrentBtn,#deleteSavedBtn,#startBtn,#resumeBtn,[data-import-save]');
+  if(!buy&&!pass&&!advance&&!forbidden)return;e.stopImmediatePropagation();e.preventDefault();
+  if(forbidden){error('Offline controls are disabled during an online game.');show();return}
+  if(buy||pass){if(snapshot?.queue?.[0]!==session.seat){error('Another studio is on the clock');show();return}submit(buy?{type:'buy',filmId:buy.dataset.buy}:{type:'pass'})}
+  if(advance){if(session.seat!==0){error('Only the host can advance eras');show();return}submit({type:'advance'})}
+ },true);
+ document.addEventListener('change',e=>{
+  if(!session||!started||!e.target.dataset.tv)return;
+  e.stopImmediatePropagation();e.preventDefault();const pi=Number(e.target.dataset.player),filmId=e.target.dataset.tv,enabled=e.target.checked;e.target.checked=!enabled;
+  if(pi!==session.seat){error('You cannot change another studio’s contracts');show();return}
+  if(!enabled&&!confirm('A previously paying TV show may permanently close if it misses an eligible season. Continue?'))return;
+  submit({type:'tv',playerIndex:pi,filmId,enabled});
+ },true);
+ if(localStorage.getItem(KEY)){open.textContent='🌐 Reconnect online';}
 })();
