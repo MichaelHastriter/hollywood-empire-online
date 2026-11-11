@@ -5,6 +5,9 @@
  const bridge=window.HollywoodOnlineBridge;if(!bridge)return;
  const API='https://umrzadpfoylkgdcaauiu.supabase.co/functions/v1/he-room';
  const eras=window.HollywoodGenreTest?.eras||[];
+ const STUDIO_NAMES=['Silverlight Pictures','Crescent Peak Studios','Golden Lantern Films','Redwood Motion Pictures','Blue Horizon Studios','Summit Gate Pictures','Copper Reel Productions','Northstar Cinema','Marquee Hill Films','Aurora Frame Studios'];
+ function shuffledStudioNames(){const names=STUDIO_NAMES.slice();for(let i=names.length-1;i>0;i--){const bytes=new Uint32Array(1);crypto.getRandomValues(bytes);const j=bytes[0]%(i+1);[names[i],names[j]]=[names[j],names[i]]}return names}
+ const randomizedNames=shuffledStudioNames();
  const KEY='he-supabase-room-v1';
  let session=null,version=-1,snapshot=null,started=false,pendingId='',working=false,requesting=false,stopped=false;
  let seenError=null;
@@ -24,7 +27,7 @@
  const panel=document.createElement('div');panel.id='heOnlinePanel';panel.innerHTML=`<section id="heOnlineInner">
  <div style="display:flex;align-items:center;justify-content:space-between"><h2 style="margin:0">🌐 Hollywood Empire Online</h2><button id="heOnlineClose" class="subtle">Close</button></div>
  <p>Create a room, join from another phone, and keep your reconnect key in this browser. The host's browser processes game turns.</p>
- <label>Studio name</label><input id="heName" maxlength="32" value="Silverlight Pictures" />
+ <label>Studio name</label><input id="heName" maxlength="32" value="" /><button id="heRandomName" class="subtle" type="button">🎲 Random name</button>
  <button id="heCreate">Create room</button>
  <label>Join room code</label><input id="heCode" maxlength="6" placeholder="ABC234" autocapitalize="characters" />
  <button id="heJoin">Join room</button><button id="heReconnect" class="subtle">Reconnect</button>
@@ -36,14 +39,16 @@
  <button id="heStop" class="subtle">Disconnect (reload for offline save)</button></section>`;
  const status=document.createElement('div');status.id='heOnlineStatus';document.body.append(open,panel,status);
  const $=id=>document.getElementById(id),safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ $('heName').value=randomizedNames[0];let nextNameIndex=1;
+ $('heRandomName').onclick=()=>{$('heName').value=randomizedNames[nextNameIndex++%randomizedNames.length]};
  for(let i=0;i<eras.length;i++){const label=eras[i].from===eras[i].to?''+eras[i].from:`${eras[i].from}–${eras[i].to}`;for(const id of ['heStartEra','heEndEra']){const el=document.createElement('option');el.value=String(i);el.textContent=label;$(id).append(el)}}$('heEndEra').value=String(eras.length-1);
  function error(s){$('heOnlineErr').textContent=String(s||'')}
  function show(){panel.classList.add('active')}function hide(){panel.classList.remove('active')}
  open.onclick=show;$('heOnlineClose').onclick=hide;
  async function api(data){const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});let result;try{result=await response.json()}catch{throw Error('Supabase did not return JSON')}if(!response.ok||result.error)throw Error(result.error||'HTTP '+response.status);return result}
  async function send(op,extra={}){if(!session)throw Error('Not connected');return api({op,code:session.code,token:session.token,...extra})}
- function joinSession(data){session={code:data.code,token:data.token,seat:data.seat};localStorage.setItem(KEY,JSON.stringify(session));version=-1;seenError=null;started=false;window.__heOnlineActive=true;open.textContent='🌐 '+session.code;$('heRoom').style.display='block';error('');show();}
- async function createOrJoin(kind){try{error('Connecting…');const data=await api({op:kind,name:$('heName').value,code:$('heCode').value.trim().toUpperCase()});joinSession(data);await poll()}catch(e){error(e.message)}}
+ function joinSession(data){if(data.name)$('heName').value=data.name;session={code:data.code,token:data.token,seat:data.seat};localStorage.setItem(KEY,JSON.stringify(session));version=-1;seenError=null;started=false;window.__heOnlineActive=true;open.textContent='🌐 '+session.code;$('heRoom').style.display='block';error('');show();}
+ async function createOrJoin(kind){try{error('Connecting…');const data=await api({op:kind,name:$('heName').value.trim(),code:$('heCode').value.trim().toUpperCase()});joinSession(data);await poll()}catch(e){error(e.message)}}
  $('heCreate').onclick=()=>createOrJoin('create');$('heJoin').onclick=()=>createOrJoin('join');
  $('heReconnect').onclick=async()=>{try{const saved=JSON.parse(localStorage.getItem(KEY)||'null');if(!saved)throw Error('No reconnect key saved in this browser.');joinSession(saved);await poll()}catch(e){error(e.message)}};
  $('heStop').onclick=()=>{if(!confirm('Disconnect from the shared game? Reload to resume your separate offline save.'))return;session=null;window.__heOnlineActive=false;stopped=true;location.reload()};
