@@ -1,4 +1,4 @@
-/* Hollywood Empire V4.89: Github Pages / Supabase host-coordinated online beta.
+/* Hollywood Empire V4.90: Github Pages / Supabase host-coordinated online beta.
    Server authenticates room seats and turns. Host browser executes the existing game engine.
    Not suitable for adversarial or prize-money competitive play. */
 (()=>{'use strict';
@@ -34,6 +34,9 @@
  #heScoresPrompt input{background:#0b1524;border:1px solid #647d9b;border-radius:8px;color:#fff;padding:8px;max-width:180px}
  #heScoresPrompt button{background:#e2b96f;color:#1b2230;border:0;border-radius:8px;padding:9px;margin:4px;font-weight:bold}
  #heOnlineStatus{position:fixed;bottom:12px;left:12px;max-width:82vw;z-index:9996;background:#142238f5;border:1px solid #b18f59;border-radius:10px;color:white;padding:8px;font:13px system-ui;display:none}
+ #heOnlineQuickActions{position:fixed;bottom:60px;left:12px;z-index:9996;display:none;max-width:calc(100vw - 24px);background:#142238f5;border:1px solid #637e9d;border-radius:11px;padding:8px;box-shadow:0 5px 18px #0007;font:13px system-ui;color:#fff}
+ #heOnlineQuickActions button{border:0;border-radius:8px;padding:10px 13px;background:#e2b96f;color:#172235;font-weight:800;font:800 13px system-ui;cursor:pointer}
+ #heOnlineQuickActions span{margin-left:8px;color:#d5e2f0}
  `;document.head.append(style);
  const open=document.createElement('button');open.id='heOnlineOpen';open.textContent='🌐 Online game';
  const panel=document.createElement('div');panel.id='heOnlinePanel';panel.innerHTML=`<section id="heOnlineInner">
@@ -51,8 +54,9 @@
  <button id="heStop" class="subtle">Disconnect (reload for offline save)</button></section>`;
  const status=document.createElement('div');status.id='heOnlineStatus';
  const scorePrompt=document.createElement('div');scorePrompt.id='heScoresPrompt';
+ const quickActions=document.createElement('div');quickActions.id='heOnlineQuickActions';quickActions.innerHTML='<button id="heQuickAction" type="button">Pass optional pick</button><span id="heQuickHint"></span>';
  scorePrompt.innerHTML='<strong>🏆 Campaign completed — claim your Hollywood Empire result</strong><p>Your final studio score can be recorded in the Top 100.</p><label>Leaderboard player name <input id="heScoreName" maxlength="32" /></label> <button id="heClaimScore">Claim score</button> <button id="heHideScore">Later</button> <p id="heScoreMessage" style="margin:5px 0"></p><a style="color:#ffdb84" href="leaderboard.html" target="_blank">View Top 100</a>';
- document.body.append(open,panel,status,scorePrompt);
+ document.body.append(open,panel,status,scorePrompt,quickActions);
  const $=id=>document.getElementById(id),safe=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  $('heName').value=randomizedNames[0];let nextNameIndex=1;
  $('heRandomName').onclick=()=>{$('heName').value=randomizedNames[nextNameIndex++%randomizedNames.length]};
@@ -82,6 +86,49 @@
   status.classList.toggle('hePending',kind==='pending');
   status.style.display='block';
  }
+ // Hide only the oversized initiative breakdown; keep the compact, clickable studio chips.
+ // This is intentionally conservative: it checks two texts unique to the large panel
+ // and refuses to hide any ancestor containing the genre-fame section.
+ function hideDuplicateInitiative(){
+  for(const el of document.querySelectorAll('h2,h3,h4,strong,b,span,div')){
+   if(el.children.length>3)continue;
+   const title=(el.textContent||'').trim();
+   if(title.length>85||!/^🎬?\s*Era initiative\s*[·•:]/i.test(title))continue;
+   let node=el;
+   for(let depth=0;depth<6 && node?.parentElement;depth++,node=node.parentElement){
+    const txt=node.textContent||'';
+    if(txt.length>5000 || txt.includes('Temporary Genre Diversification Fame'))break;
+    if(txt.includes('Fixed order for every draft pass') && txt.includes('Order was set')){
+     node.style.setProperty('display','none','important');
+     node.dataset.heHiddenDuplicate='true';
+     break;
+    }
+   }
+  }
+ }
+ let layoutRefreshQueued=false;
+ const layoutObserver=new MutationObserver(()=>{
+  if(layoutRefreshQueued)return;
+  layoutRefreshQueued=true;
+  setTimeout(()=>{layoutRefreshQueued=false;if(started)hideDuplicateInitiative()},80);
+ });
+ layoutObserver.observe(document.body,{childList:true,subtree:true});
+ function updateQuickActions(pending){
+  const button=$('heQuickAction'),hint=$('heQuickHint');
+  const who=snapshot?.queue?.[0],extras=snapshot?.optionalPhase==='extras';
+  const canPass=started&&!snapshot?.complete&&extras&&who===session?.seat;
+  const canAdvance=started&&!snapshot?.complete&&session?.seat===0&&snapshot?.queue?.length===0;
+  const visible=!pending&&!submitting&&(canPass||canAdvance);
+  quickActions.style.display=visible?'block':'none';
+  if(!visible)return;
+  button.textContent=canPass?'Pass optional pick':'Advance to next era';
+  button.dataset.action=canPass?'pass':'advance';
+  hint.textContent=canPass?'Buy another film or pass.':'Everyone has finished drafting.';
+ }
+ $('heQuickAction').onclick=()=>{
+  const type=$('heQuickAction').dataset.action;
+  if(type==='pass'||type==='advance')submit({type});
+ };
  status.title='Tap to open room details';status.onclick=show;
  open.onclick=show;$('heOnlineClose').onclick=hide;
  async function api(data){const response=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});let result;try{result=await response.json()}catch{throw Error('Supabase did not return JSON')}if(!response.ok||result.error)throw Error(result.error||'HTTP '+response.status);return result}
@@ -140,13 +187,15 @@
    bridge.setSnapshot(snapshot);
   }else if(version<0){version=m.version}
   if(started&&resumeNeedsClose){hide();resumeNeedsClose=false}
-  const who=snapshot?.queue?.[0];const turn=!started?'Waiting for host to start':snapshot?.complete?'Campaign finished':who==null?'All drafting done; host can advance':`On the clock: ${snapshot?.players?.[who]?.name||'Studio '+(who+1)}`;
+  const who=snapshot?.queue?.[0];const turn=!started?'Waiting for host to start':snapshot?.complete?'Campaign finished':who==null?'All drafting done; host can advance':`On the clock: ${snapshot?.players?.[who]?.name||'Studio '+(who+1)}${snapshot?.optionalPhase==='extras'?' (optional extra pick: buy or pass)':''}`;
   $('heTurn').textContent=turn;
   const mine=started&&!snapshot?.complete&&who===session.seat;
   const busy=Boolean(m.pending);
   const statusText=busy?'⏳ Recording the previous move…':mine?'🎬 YOUR TURN — '+(snapshot?.players?.[who]?.name||'Your studio'):
    started&&!snapshot?.complete?'⏳ Waiting — '+turn:turn;
   updateTurnStatus(`🌐 ${m.code} · Seat ${session.seat+1} · ${statusText}`,busy?'pending':mine?'mine':'waiting');
+  updateQuickActions(busy);
+  if(started)hideDuplicateInitiative();
   if(m.lastError && m.lastError!==seenError){
    seenError=m.lastError;error('Last move was rejected: '+m.lastError);
    updateTurnStatus('⚠ Move rejected. The room is still connected; try again.','waiting');
